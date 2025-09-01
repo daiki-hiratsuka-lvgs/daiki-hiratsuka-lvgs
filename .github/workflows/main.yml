@@ -23,46 +23,31 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install and Configure rclone
+      - name: Install rclone
         run: sudo -v ; curl https://rclone.org/install.sh | sudo bash
-
-      # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-      # ▼▼▼【デバッグ用ステップ】Secretの中身をここで確認します ▼▼▼
-      # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-      - name: DEBUG - Check Secret Content
-        run: |
-          echo "--- Secret Content Check ---"
-          SECRET_CONTENT="${{ secrets.RCLONE_CONF }}"
-          if [ -z "$SECRET_CONTENT" ]; then
-            echo "Error: Secret RCLONE_CONF is empty or not found."
-            exit 1
-          fi
-          echo "Secret was found. Checking first 15 characters."
-          FIRST_CHARS=$(echo "$SECRET_CONTENT" | cut -c 1-15)
-          echo "First 15 characters of the secret are:"
-          echo "$FIRST_CHARS"
-          echo "--- End of Secret Content Check ---"
-          
-          # ここで一度、rclone.confファイルを作成してみる
-          echo "${{ secrets.RCLONE_CONF }}" > rclone.conf
-          echo "rclone.conf file created. Checking its content:"
-          cat rclone.conf
-
-      - name: Create rclone.conf from Secret
+      
+      # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+      # ▼▼▼【変更点】SecretをBase64デコードしてrclone.confを作成 ▼▼▼
+      # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+      - name: Create rclone.conf from Base64 Secret
         run: |
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+          echo "${{ secrets.RCLONE_CONF }}" | base64 --decode > ~/.config/rclone/rclone.conf
+          
+          # デバッグのため、作成されたファイルの中身を表示
+          echo "--- Decoded rclone.conf content ---"
+          cat ~/.config/rclone/rclone.conf
+          echo "-----------------------------------"
 
-      # このステップからエラーが出るはず
       - name: Download target folder from Google Drive
         run: |
           LOCAL_FOLDER="drive_data"
           mkdir -p $LOCAL_FOLDER
           rclone copy "${{ env.RCLONE_REMOTE_NAME }}:${{ env.DRIVE_SEARCH_PATH }}" $LOCAL_FOLDER
       
-      # (以下、変更なし)
       - name: Run Python Script
         run: python "${{ env.PYTHON_SCRIPT }}"
+
       - name: Upload zip and Delete original folder
         if: success()
         run: |
