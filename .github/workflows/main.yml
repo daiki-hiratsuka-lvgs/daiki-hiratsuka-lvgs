@@ -1,0 +1,91 @@
+name: Archive Google Drive Yearly Folder
+
+# =================================================================
+# ▼▼▼ 設定はここから ▼▼▼
+# =================================================================
+on:
+  workflow_dispatch: # Actionsタブから手動実行を許可するための設定
+  schedule:
+    # 毎月1日の午前10時(JST)に実行 (UTCでは午前1時)
+    - cron: '0 1 1 * *'
+
+env:
+  # ★設定1★ rcloneで設定した接続名
+  # マイドライブなら gdrive, 共有ドライブ用に別名を設定したなら gdrive_shared など
+  RCLONE_REMOTE_NAME: "gdrive"
+
+  # ★設定2★ Google Drive上の、探索を開始する上位フォルダパス
+  DRIVE_SEARCH_PATH: "コピー先"
+
+  # ★設定3★ 実行するNotebookのファイル名
+  NOTEBOOK_FILE: "archive_notebook.ipynb"
+
+  # ★設定4★ 何年前の年度をアーカイブするか
+  YEARS_AGO: 4
+# =================================================================
+# ▲▲▲ 設定はここまで ▲▲▲
+# =================================================================
+
+jobs:
+  archive-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install and Configure rclone
+        run: |
+          sudo -v ; curl https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+
+      - name: Download target folder from Google Drive
+        run: |
+          LOCAL_FOLDER="drive_data"
+          mkdir -p $LOCAL_FOLDER
+          echo "Downloading from ${{ env.RCLONE_REMOTE_NAME }}:${{ env.DRIVE_SEARCH_PATH }} to $LOCAL_FOLDER..."
+          rclone copy "${{ env.RCLONE_REMOTE_NAME }}:${{ env.DRIVE_SEARCH_PATH }}" $LOCAL_FOLDER
+
+      - name: Install Python dependencies
+        run: pip install papermill ipykernel notebook
+
+      - name: Run Jupyter Notebook
+        run: |
+          papermill "${{ env.NOTEBOOK_FILE }}" "output_notebook.ipynb" -p years_ago ${{ env.YEARS_AGO }}
+
+      - name: Upload zip and Delete original folder
+        if: success() # Notebookの実行が成功した場合のみ実行
+        run: |
+          if [ ! -f "folder_to_delete.txt" ]; then
+            echo "No folder was processed. Exiting."
+            exit 0
+          fi
+          
+          # Notebookが書き出した相対パスを読み込む
+          RELATIVE_ZIP_PATH=$(cat zip_to_upload.txt)
+          RELATIVE_FOLDER_PATH=$(cat folder_to_delete.txt)
+
+          # ローカルのフルパスを組み立てる
+          LOCAL_ZIP_FULL_PATH="drive_data/$RELATIVE_ZIP_PATH"
+
+          if [ ! -f "$LOCAL_ZIP_FULL_PATH" ]; then
+            echo "Zip file not found at $LOCAL_ZIP_FULL_PATH. Exiting."
+            exit 1
+          fi
+
+          # rclone copyto を使い、Drive上の正しい階層にZipファイルをアップロード
+          REMOTE_ZIP_FULL_PATH="${{ env.DRIVE_SEARCH_PATH }}/${RELATIVE_ZIP_PATH}"
+          echo "Uploading $LOCAL_ZIP_FULL_PATH to ${{ env.RCLONE_REMOTE_NAME }}:$REMOTE_ZIP_FULL_PATH"
+          rclone copyto "$LOCAL_ZIP_FULL_PATH" "${{ env.RCLONE_REMOTE_NAME }}:$REMOTE_ZIP_FULL_PATH"
+
+          # Drive上の正しい階層のフォルダを削除
+          REMOTE_FOLDER_FULL_PATH="${{ env.DRIVE_SEARCH_PATH }}/${RELATIVE_FOLDER_PATH}"
+          echo "Deleting original folder from Google Drive: $REMOTE_FOLDER_FULL_PATH"
+          rclone purge "${{ env.RCLONE_REMOTE_NAME }}:${REMOTE_FOLDER_FULL_PATH}"
+          echo "Deletion complete."
+
